@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from core.api import build_cookie_header
 from core.conversations import list_conversations
-from core.qrlogin import QrLoginSession
+from core.qrlogin import QrLoginSession, SmsLoginSession
 from page import _SETUP_PAGE_HTML
 
 PREFIX = "/dyspark"
@@ -63,6 +63,7 @@ class Session:
 
 sessions: Dict[str, Session] = {}
 scans: Dict[str, QrLoginSession] = {}
+sms_sessions: Dict[str, SmsLoginSession] = {}
 
 
 def _get(auth: str) -> Optional[Session]:
@@ -195,6 +196,46 @@ async def scan_sms(auth: str, request: Request) -> JSONResponse:
         return _fail("请输入 4 到 8 位短信验证码。")
     scan.submit_sms_code(code)
     return _ok(message="验证码已提交，请等待登录结果。")
+
+
+# ---------- 手机号短信验证码登录（扫码备选） ----------
+
+
+@app.post(PREFIX + "/api/sms/send/{auth}")
+async def sms_send(auth: str, request: Request) -> JSONResponse:
+    if _get(auth) is None:
+        return _fail("链接无效或已过期。", 404)
+    body = await request.json()
+    mobile = str(body.get("mobile", "")).strip()
+    if not mobile:
+        return _fail("请输入手机号")
+    old = sms_sessions.pop(auth, None)
+    if old is not None:
+        await old.aclose()
+    session = SmsLoginSession()
+    sms_sessions[auth] = session
+    try:
+        await session.send_code(mobile)
+        return _ok(status=session.status, message=session.message)
+    except Exception as e:
+        sms_sessions.pop(auth, None)
+        return _fail(str(e))
+
+
+@app.post(PREFIX + "/api/sms/submit/{auth}")
+async def sms_submit(auth: str, request: Request) -> JSONResponse:
+    if _get(auth) is None:
+        return _fail("链接无效或已过期。", 404)
+    session = sms_sessions.get(auth)
+    if session is None:
+        return _fail("请先发送短信验证码")
+    body = await request.json()
+    code = str(body.get("code", "")).strip()
+    try:
+        await session.submit_code(code)
+        return _ok(status="success", cookies=session.cookies, message="短信登录成功，Cookie 已填入下方文本框，请继续提交。")
+    except Exception as e:
+        return _fail(str(e))
 
 
 # ---------- 会话列表 ----------
