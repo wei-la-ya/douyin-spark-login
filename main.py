@@ -30,6 +30,20 @@ _WS_PING_S = 20.0
 app = FastAPI(title="DouyinSpark 外置配置服务", docs_url=None, redoc_url=None)
 
 
+@app.on_event("startup")
+async def _check_websocket_dep() -> None:
+    """启动时检查 websockets 依赖：缺失则直接报错，避免 /dyspark/ws/* 静默退化为 HTTP 404"""
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        raise RuntimeError(
+            "缺少 websockets 依赖，无法启用 WS 回调。请执行：\n"
+            "  pip install -r requirements.txt\n"
+            "或：\n"
+            "  uv sync"
+        )
+
+
 class Session:
     def __init__(self, auth: str, body: Dict[str, Any]) -> None:
         self.auth = auth
