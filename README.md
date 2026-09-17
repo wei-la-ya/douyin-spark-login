@@ -4,14 +4,23 @@
 
 完全独立可运行：协议核心（扫码登录 / 会话列表 / a_bogus 签名 / protobuf）自带于 `core/`，不依赖 gsuid_core 或插件仓库。
 
-## 运行
+## 运行（uv 一键启动）
 
 ```bash
 git clone https://github.com/wei-la-ya/douyin-spark-login.git
 cd douyin-spark-login
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8080
+uv run start
 ```
+
+首次运行 uv 会自动创建虚拟环境并安装依赖。监听地址在 `config.toml` 配置（host 默认 `0.0.0.0`，port 默认 `8080`），改端口不需要命令行参数：
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+```
+
+也可以传统方式运行：`pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8080`
 
 ## 插件侧对接
 

@@ -332,3 +332,32 @@ async def listen_ws(websocket: WebSocket, auth: str) -> None:
 @app.get(PREFIX + "/health")
 async def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+# ===================== 启动入口（uv run start） =====================
+
+def _load_server_config() -> tuple[str, int]:
+    """读取 config.toml 的 [server] 节；缺失时用默认值"""
+    import tomllib
+    from pathlib import Path
+
+    config_file = Path(__file__).parent / "config.toml"
+    host, port = "0.0.0.0", 8080
+    if config_file.exists():
+        with config_file.open("rb") as f:
+            server = tomllib.load(f).get("server", {})
+        host = str(server.get("host", host))
+        port = int(server.get("port", port))
+    return host, port
+
+
+def start() -> None:
+    """uv run start 入口：按 config.toml 启动服务（host 默认 0.0.0.0，port 默认 8080）"""
+    import uvicorn
+
+    host, port = _load_server_config()
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+if __name__ == "__main__":
+    start()
