@@ -147,8 +147,8 @@ async def _stage_login_cookie(auth: str, login_session) -> None:
     sess = _get(auth)
     if sess is None or login_session.cookies is None:
         return
-    sess["cookies_staged"] = list(login_session.cookies)
-    sess["api_name"] = (login_session.screen_name or "").strip() or "未命名抖音账号"
+    sess.cookies_staged = list(login_session.cookies)
+    sess.api_name = (login_session.screen_name or "").strip() or "未命名抖音账号"
 
 
 # ---------- 扫码登录 ----------
@@ -279,7 +279,7 @@ async def conversations(auth: str, request: Request) -> JSONResponse:
     session = _get(auth)
     if session is None:
         return _fail("链接无效或已过期。", 404)
-    cookies = session.get("cookies_staged")
+    cookies = session.cookies_staged
     if not cookies:
         return _fail("请先完成扫码或短信登录，再拉取会话列表")
     try:
@@ -318,7 +318,7 @@ async def save(auth: str, request: Request) -> JSONResponse:
     if session is None:
         return _fail("链接无效或已过期。", 404)
     is_new = session.account_id is None
-    cookies = session.get("cookies_staged")
+    cookies = session.cookies_staged if hasattr(session, "cookies_staged") else None
     if is_new and not cookies:
         return _fail("请先完成扫码或短信登录，再填写配置")
     body = await request.json()

@@ -255,7 +255,7 @@ _SETUP_PAGE_HTML = """<!doctype html>
     const smsStatus = document.querySelector('#smsStatus');
     smsSend.addEventListener('click', async () => {
       const mobile = smsMobile.value.trim();
-      if (!/^\+?[\d\s-]{6,20}$/.test(mobile)) { smsStatus.textContent = '请输入正确的手机号'; return; }
+      if (!/^\\+?[\\d\\s-]{6,20}$/.test(mobile)) { smsStatus.textContent = '请输入正确的手机号'; return; }
       smsSend.disabled = true;
       smsStatus.textContent = '正在发送验证码…';
       try {
