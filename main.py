@@ -131,14 +131,24 @@ async def page(auth: str) -> HTMLResponse:
         .replace("__TOKEN__", auth)
         .replace("__DATA__", data)
         .replace("__PREFIX__", PREFIX)
-        .replace("__COOKIE_REQUIRED__", "" if editing else "required")
-        .replace(
-            "__COOKIE_PLACEHOLDER__",
-            "留空则保留当前 Cookie；需要更新时粘贴或选择 .txt 文件。" if editing else "粘贴 Cookie-Editor 导出的 JSON 数组，或先选择 .txt 文件。",
-        )
         .replace("__SUBMIT_LABEL__", "保存修改" if editing else "添加账号")
     )
     return HTMLResponse(html)
+
+
+# ---------- 登录成功后把 Cookie 暂存到 session（无需下方提交） ----------
+
+async def _stage_login_cookie(auth: str, login_session) -> None:
+    """登录成功后把 Cookie + API 账号名写入 session。
+
+    外置项目是纯转发，本身不持 DB；Cookie 实际写入要等 /api/setup 触发 WS 时
+    才到 bot 侧入库。在此之前把数据暂存 session，让页面能立即展示"Cookie 已自动入库"。
+    """
+    sess = _get(auth)
+    if sess is None or login_session.cookies is None:
+        return
+    sess["cookies_staged"] = list(login_session.cookies)
+    sess["api_name"] = (login_session.screen_name or "").strip() or "未命名抖音账号"
 
 
 # ---------- 扫码登录 ----------
@@ -191,7 +201,12 @@ async def scan_status(auth: str) -> JSONResponse:
         scans.pop(auth, None)
         return _ok(status="error", message=message)
     if scan.status == "success":
-        return _ok(status="success", cookies=scan.cookies)
+        await _stage_login_cookie(auth, scan)
+        return _ok(
+            status="success",
+            name=scan.screen_name or "",
+            message="登录成功，Cookie 已暂存。请填写下方消息模板/邮箱/好友后保存。",
+        )
     if scan.status == "sms":
         return _ok(status="sms", message=scan.message or "请输入短信验证码。")
     if scan.status == "scanned":
@@ -247,7 +262,12 @@ async def sms_submit(auth: str, request: Request) -> JSONResponse:
     code = str(body.get("code", "")).strip()
     try:
         await session.submit_code(code)
-        return _ok(status="success", cookies=session.cookies, message="短信登录成功，Cookie 已填入下方文本框，请继续提交。")
+        await _stage_login_cookie(auth, session)
+        return _ok(
+            status="success",
+            name=session.screen_name or "",
+            message="短信登录成功，Cookie 已暂存。请填写下方消息模板/邮箱/好友后保存。",
+        )
     except Exception as e:
         return _fail(str(e))
 
@@ -259,16 +279,9 @@ async def conversations(auth: str, request: Request) -> JSONResponse:
     session = _get(auth)
     if session is None:
         return _fail("链接无效或已过期。", 404)
-    body = await request.json()
-    cookie_text = str(body.get("cookieText", "")).strip()
-    if not cookie_text:
-        return _fail("请先粘贴 Cookie JSON 或完成扫码登录，再拉取会话列表")
-    try:
-        cookies = json.loads(cookie_text)
-        if not isinstance(cookies, list):
-            raise ValueError
-    except ValueError:
-        return _fail("Cookie JSON 格式不正确")
+    cookies = session.get("cookies_staged")
+    if not cookies:
+        return _fail("请先完成扫码或短信登录，再拉取会话列表")
     try:
         build_cookie_header(cookies)
         people = await list_conversations(cookies)
@@ -296,28 +309,25 @@ _SEC_UID_RE = re.compile(r"^MS4w[\w-]{10,}$")
 
 @app.post(PREFIX + "/api/setup/{auth}")
 async def save(auth: str, request: Request) -> JSONResponse:
+    """保存配置。
+
+    编辑场景（account_id 已存在）：不要求 Cookie 已暂存，bot 端会用现有 Cookie。
+    新增场景：必须先 QR/SMS 登录成功（cookies_staged 存在）才能提交，否则拒绝。
+    """
     session = _get(auth)
     if session is None:
         return _fail("链接无效或已过期。", 404)
+    is_new = session.account_id is None
+    cookies = session.get("cookies_staged")
+    if is_new and not cookies:
+        return _fail("请先完成扫码或短信登录，再填写配置")
     body = await request.json()
-    editing = session.account_id is not None
 
     name = str(body.get("name", "")).strip()
     if not name or len(name) > 40:
         return _fail("账号名称必填且不能超过 40 个字符")
-    cookie_text = str(body.get("cookieText", "")).strip()
-    cookies = None
-    if cookie_text:
-        try:
-            cookies = json.loads(cookie_text)
-            if not isinstance(cookies, list) or not all(isinstance(c, dict) and c.get("name") for c in cookies):
-                raise ValueError
-        except ValueError:
-            return _fail("Cookie JSON 格式不正确，应为 Cookie-Editor 导出的数组")
-        if not any(c.get("name") == "sessionid" for c in cookies):
-            return _fail("Cookie 中缺少 sessionid，请导出完整 Cookie")
-    elif not editing:
-        return _fail("请粘贴 Cookie JSON 或先扫码登录")
+    if cookies and not any(c.get("name") == "sessionid" for c in cookies):
+        return _fail("Cookie 中缺少 sessionid，请重新登录")
 
     targets = [
         {
@@ -334,17 +344,22 @@ async def save(auth: str, request: Request) -> JSONResponse:
         if isinstance(t, dict) and isinstance(t.get("secUid"), str) and _SEC_UID_RE.match(str(t.get("secUid")))
     ]
 
+    email = str(body.get("email", "")).strip()
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return _fail("邮箱格式不正确")
+
     session.payload = {
         "account_id": session.account_id,
         "name": name,
         "cookies": cookies,
         "message_template": str(body.get("messageTemplate", "")),
         "targets": targets,
-        "email": str(body.get("email", "")).strip(),
+        "email": email,
         "success_email_enabled": bool(body.get("successEmailEnabled")),
     }
     session.status = "success"
-    session.msg = f"账号已{'更新' if editing else '添加'}，已保存 {len(targets)} 个续火目标。现在可以关闭此页面。"
+    target_note = f"，已保存 {len(targets)} 个续火目标" if targets else ""
+    session.msg = f"账号已配置{target_note}。现在可以关闭此页面。"
     await session.broadcast()
     return _ok(message=session.msg)
 
