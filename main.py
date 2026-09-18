@@ -104,6 +104,12 @@ async def start(request: Request) -> JSONResponse:
     if not auth:
         return _fail("缺少 auth")
     sessions[auth] = Session(auth, body)
+    # 编辑模式（account_id 已存在）：bot 端把数据库里的 cookies 放在 body.existing_cookies 传过来，
+    # 直接注入到 session，省去用户重新扫码。Cookie 不过期就能继续拉取会话。
+    existing = body.get("existing_cookies")
+    if existing and isinstance(existing, list):
+        sessions[auth].cookies_staged = existing
+        # 编辑模式不暴露 sessionid 截断：保留原值即可
     old = scans.pop(auth, None)
     if old is not None:
         old.cancel()
@@ -148,6 +154,9 @@ async def _stage_login_cookie(auth: str, login_session) -> None:
     if sess is None or login_session.cookies is None:
         return
     sess.cookies_staged = list(login_session.cookies)
+    # 把本次扫码生成的 device_id 一并暂存（/api/setup 时随 payload 发回 bot 端持久化）
+    if getattr(login_session, "device_id", None):
+        sess.device_id_staged = login_session.device_id
     sess.api_name = (login_session.screen_name or "").strip() or "未命名抖音账号"
 
 
@@ -279,7 +288,7 @@ async def conversations(auth: str, request: Request) -> JSONResponse:
     session = _get(auth)
     if session is None:
         return _fail("链接无效或已过期。", 404)
-    cookies = session.cookies_staged
+    cookies = getattr(session, "cookies_staged", None)
     if not cookies:
         return _fail("请先完成扫码或短信登录，再拉取会话列表")
     try:
@@ -352,6 +361,7 @@ async def save(auth: str, request: Request) -> JSONResponse:
         "account_id": session.account_id,
         "name": name,
         "cookies": cookies,
+        "device_id": getattr(session, "device_id_staged", "") or "",
         "message_template": str(body.get("messageTemplate", "")),
         "targets": targets,
         "email": email,
